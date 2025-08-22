@@ -1,0 +1,123 @@
+name: Build
+
+on:
+  workflow_run:
+    workflows: ["Sync cloudflared Release"]
+    types: ["completed"]
+  push: 
+    tags: ["*"]
+    branches: ["Release-*"]
+  release:
+    types: [created, published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [1.24.x]
+        os: [ubuntu-latest, macos-latest, freebsd, netbsd, openbsd]
+    env:
+      GOEXPERIMENT: "noboringcrypto"
+      CGO_ENABLED: 0
+    steps:
+      - name: Get latest release tag
+        id: get_release
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data } = await github.rest.repos.getLatestRelease({
+              owner: context.repo.owner,
+              repo:  context.repo.repo
+            });
+            core.setOutput('tag_name', data.tag_name);
+
+      - name: Checkout Release Tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.get_release.outputs.tag_name }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install go on ubuntu-latest and macos-latest
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Build from Source on ubuntu-latest and macos-latest
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+        run: |
+          make cloudflared
+          pwd && ls -l
+
+      - name: Build from Source on FreeBSD
+        if: matrix.os == 'freebsd'
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.2"
+          envs: "GOEXPERIMENT CGO_ENABLED"
+          usesh: true
+          mem: 4096
+          prepare: |
+            pkg install -y gmake sudo bash git go golangci-lint curl wget fakeroot libffi rubygem-fpm
+            git config --global --add safe.directory /home/runner/work/cloudflared/cloudflared
+          run: |
+            go mod download
+            go mod tidy
+            go install golang.org/x/tools/cmd/goimports@latest
+            gmake cloudflared
+            pwd && ls -l
+
+      - name: Build from Source on NetBSD
+        if: matrix.os == 'netbsd'
+        uses: vmactions/netbsd-vm@v1
+        with:
+          release: "10.1"
+          envs: "GOEXPERIMENT CGO_ENABLED"
+          usesh: true
+          mem: 4096
+          prepare: |
+            export PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/pkg/sbin:/usr/pkg/bin:$PATH
+            PKG_PATH="https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$(uname -p)/$(uname -r | cut -f '1 2' -d.)/All/"
+            export PKG_PATH
+            pkg_add -U pkgin pkg_alternatives
+            pkgin update
+            pkgin -y install gmake sudo bash git go golangci-lint curl wget fakeroot libffi ruby32 
+            pkg_alternatives rebuild
+            gem install fpm
+            git config --global --add safe.directory /home/runner/work/cloudflared/cloudflared
+          run: |
+            go mod download
+            go mod tidy
+            go install golang.org/x/tools/cmd/goimports@latest
+            gmake cloudflared
+            pwd && ls -l
+
+      - name: Build from Source on OpenBSD
+        if: matrix.os == 'openbsd'
+        uses: vmactions/openbsd-vm@v1
+        with:
+          release: "7.7"
+          envs: "GOEXPERIMENT CGO_ENABLED"
+          usesh: true
+          mem: 4096
+          prepare: |
+            pkg_add -xaz gmake sudo-- bash git go curl wget libffi ruby-34
+            gem34 install fpm
+            git config --global --add safe.directory /home/runner/work/cloudflared/cloudflared
+          run: |
+            go mod download
+            go mod tidy
+            go install golang.org/x/tools/cmd/goimports@latest
+            gmake cloudflared
+            pwd && ls -l
+
+      - name: Authenticate GH CLI
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Upload build to GitHub Release
+        run: |
+          pwd && ls -l
+          tar -czvf cloudflared-${{ matrix.os }}-amd64.tar.gz cloudflared
+          gh release upload "${{ steps.get_release.outputs.tag_name }}" cloudflared-${{ matrix.os }}-amd64.tar.gz --clobber

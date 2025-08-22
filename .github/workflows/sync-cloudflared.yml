@@ -1,0 +1,99 @@
+name: Sync cloudflared Release
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout custom-change branch
+        uses: actions/checkout@v4
+        with:
+          ref: custom-change
+          fetch-depth: 0
+
+      - name: Get latest upstream release info
+        id: get_release
+        run: |
+          echo 'Fetching latest release tag from cloudflare/cloudflared...'
+          release=$(curl -s https://api.github.com/repos/cloudflare/cloudflared/releases/latest)
+          tag=$(echo "$release" | jq -r .tag_name)
+          title=$(echo "$release" | jq -r .name)
+          echo "tag=$tag" >> $GITHUB_OUTPUT
+          echo "title=$title" >> $GITHUB_OUTPUT
+          echo "TAG=$tag" >> $GITHUB_ENV
+          echo "TITLE=$title" >> $GITHUB_ENV
+          echo "tag=$tag"
+          echo "title=$title"
+          echo "TAG=$tag"
+          echo "TITLE=$title"
+
+      - name: Check if already up-to-date
+        id: check_version
+        run: |
+          last=$(git tag --sort=-creatordate | head -n1 )
+          echo "current=$last" >> $GITHUB_OUTPUT
+          echo "current=$last"
+          if [ "$last" = "${{ env.TAG }}" ]; then
+            echo 'up_to_date=true' >> $GITHUB_OUTPUT
+            echo 'up_to_date=true'
+          else
+            echo 'up_to_date=false' >> $GITHUB_OUTPUT
+            echo 'up_to_date=false'
+          fi
+
+      - name: Prepare Release branch
+        if: steps.check_version.outputs.up_to_date == 'false'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          branch="release/${TAG}"
+
+          #1 Add upstream and fetch the tag
+          git remote add upstream https://github.com/cloudflare/cloudflared.git
+          git fetch upstream --depth=1 tag "${TAG}"
+
+          #2 Create new branch off the upstream tag
+          git checkout -b "${branch}" "FETCH_HEAD"
+
+          #3 Merge in custom-change
+          git fetch origin custom-change
+          git merge --no-commit --no-ff origin/custom-change || true
+
+          #4 Re-apply your own workflows
+          rm -rf .github/workflows
+          git checkout origin/custom-change -- \
+            diagnostic/network/collector_unix_test.go \
+            diagnostic/network/collector_unix.go \
+            diagnostic/system_collector_unix.go \
+            ingress/icmp_posix.go \
+            ingress/icmp_posix_test.go \
+            Makefile
+
+          #5 Finalise and push
+          git add -A
+          git commit -m "sync: apply custom-change on ${TAG}"
+          git push --force-with-lease origin "${branch}"
+
+      - name: Create GitHub Release
+        if: steps.check_version.outputs.up_to_date == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TITLE }}
+          body: |
+            Automated cloudflared release of version **${{ env.TAG }}**  
+            Stock upstream cloudflared with xxx-BSD tweaks from `custom-change` branch in this repo.
+          draft: false
+          prerelease: false
+          target_commitish: release/${{ env.TAG }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

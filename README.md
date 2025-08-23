@@ -7,6 +7,7 @@ The current supported build targets are:
 
 * Ubuntu-latest (amd64)
 * MacOS-latest (amd64)
+* Windows-latest (amd64)
 * FreeBSD 14 (amd64)
 * OpenBSD 7 (amd64)
 * NetBSD 10 (amd64)

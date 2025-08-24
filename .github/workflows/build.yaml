@@ -1,12 +1,9 @@
 name: Build
 
 on:
-  workflow_run:
-    workflows: ["Sync cloudflared Release"]
-    types: ["completed"]
   push: 
     tags: ["*"]
-    branches: ["Release-*"]
+    branches: ["release/*"]
   release:
     types: [created, published]
   workflow_dispatch:

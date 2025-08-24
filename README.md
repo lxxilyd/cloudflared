@@ -12,7 +12,6 @@ The current supported build targets are:
 * OpenBSD 7 (amd64)
 * NetBSD 10 (amd64)
 
-
 Builds happen on virtual machines and are not cross-compiled in Linux:
 
 ```yaml
@@ -25,7 +24,7 @@ cloudflared-netbsd10-amd64: ELF 64-bit LSB executable, x86-64, version 1 (NetBSD
 
 ## Branching Model
 
-* **`custom-change` (default)**
+* **`custom/patch` (default)**
 
   * Contains *only* our fork-specific changes (CI config, workflows, branding, etc.).
   * Users and automation never push directly to this branch—it serves as the persistent overlay.
@@ -33,8 +32,8 @@ cloudflared-netbsd10-amd64: ELF 64-bit LSB executable, x86-64, version 1 (NetBSD
 * **`release/<tag>`**
 
   * Created automatically (or manually) for each new upstream release tag (e.g. `release/2025.4.2`).
-  * Merges the upstream tag, then applies `custom-change` on top.
-  * Open a PR from this branch into `custom-change` to review upstream changes + overlay.
+  * Merges the upstream tag, then applies `custom/patch` on top.
+  * Open a PR from this branch into `custom/patch` to review upstream changes + overlay.
 
 ## Getting Started
 
@@ -45,14 +44,14 @@ cloudflared-netbsd10-amd64: ELF 64-bit LSB executable, x86-64, version 1 (NetBSD
    cd cloudflared
    ```
 
-2. **Verify `custom-change` is default**
+2. **Verify `custom/patch` is default**
 
    ```sh
-   git branch --show-current  # should output: custom-change
+   git branch --show-current  # should output: custom/patch
    ```
 
 3. **Update README**
-   Simply edit this file and push to `custom-change`:
+   Simply edit this file and push to `custom/patch`:
 
    ```sh
    git checkout custom-change
@@ -63,5 +62,5 @@ cloudflared-netbsd10-amd64: ELF 64-bit LSB executable, x86-64, version 1 (NetBSD
 
 ## Contributing
 
-1. Open issues or PRs against **`custom-change`** for any improvements to workflows, docs, or configs.
+1. Open issues or PRs against **`custom/patch`** for any improvements to workflows, docs, or configs.
 2. Upstream bugs/features should still be filed against [cloudflare/cloudflared](https://github.com/cloudflare/cloudflared).

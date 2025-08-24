@@ -13,10 +13,10 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout custom-change branch
+      - name: Checkout custom/patch branch
         uses: actions/checkout@v4
         with:
-          ref: custom-change
+          ref: custom/patch
           fetch-depth: 0
 
       - name: Get latest upstream release info
@@ -38,6 +38,7 @@ jobs:
       - name: Check if already up-to-date
         id: check_version
         run: |
+          git fetch --tags
           last=$(git tag --sort=-creatordate | head -n1 )
           echo "current=$last" >> $GITHUB_OUTPUT
           echo "current=$last"
@@ -64,13 +65,13 @@ jobs:
           #2 Create new branch off the upstream tag
           git checkout -b "${branch}" "FETCH_HEAD"
 
-          #3 Merge in custom-change
-          git fetch origin custom-change
-          git merge --no-commit --no-ff origin/custom-change || true
+          #3 Merge in custom/patch
+          git fetch origin custom/patch
+          git merge --no-commit --no-ff origin/custom/patch || true
 
           #4 Re-apply your own workflows
           rm -rf .github/workflows
-          git checkout origin/custom-change -- \
+          git checkout origin/custom/patch -- \
             diagnostic/network/collector_unix_test.go \
             diagnostic/network/collector_unix.go \
             diagnostic/system_collector_unix.go \
@@ -80,7 +81,7 @@ jobs:
 
           #5 Finalise and push
           git add -A
-          git commit -m "sync: apply custom-change on ${TAG}"
+          git commit -m "sync: apply custom/patch on ${TAG}"
           git push --force-with-lease origin "${branch}"
 
       - name: Create GitHub Release
@@ -91,9 +92,14 @@ jobs:
           name: ${{ env.TITLE }}
           body: |
             Automated cloudflared release of version **${{ env.TAG }}**  
-            Stock upstream cloudflared with xxx-BSD tweaks from `custom-change` branch in this repo.
+            Stock upstream cloudflared with xxx-BSD tweaks from `custom/patch` branch in this repo.
           draft: false
           prerelease: false
           target_commitish: release/${{ env.TAG }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trigger Build workflow
+        if: steps.check_version.outputs.up_to_date == 'false'
+        run: gh workflow run "Build" --repo ${{ github.repository }}
+        env: 
+          GITHUB_TOKEN: ${{ secrets.PTA_TOKEN }}

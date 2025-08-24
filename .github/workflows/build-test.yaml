@@ -22,3 +22,8 @@ jobs:
       run: |
         make cloudflared
         pwd && ls
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cloudflared-${{ matrix.os }}
+        path: ${{ matrix.os == 'windows-latest' && 'cloudflared.exe' || 'cloudflared' }}

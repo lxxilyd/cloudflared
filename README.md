@@ -1,82 +1,66 @@
-# Cloudflare Tunnel client
+# cloudflared for xxx-BSD
 
-Contains the command-line client for Cloudflare Tunnel, a tunneling daemon that proxies traffic from the Cloudflare network to your origins.
-This daemon sits between Cloudflare network and your origin (e.g. a webserver). Cloudflare attracts client requests and sends them to you
-via this daemon, without requiring you to poke holes on your firewall --- your origin can remain as closed as possible.
-Extensive documentation can be found in the [Cloudflare Tunnel section](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps) of the Cloudflare Docs.
-All usages related with proxying to your origins are available under `cloudflared tunnel help`.
+This repository maintains a fork of `cloudflare/cloudflared` with minimal customizations in order to build for most *BSD systems.  
+The supported automated builds are attached to the Releases area.
 
-You can also use `cloudflared` to access Tunnel origins (that are protected with `cloudflared tunnel`) for TCP traffic
-at Layer 4 (i.e., not HTTP/websocket), which is relevant for use cases such as SSH, RDP, etc.
-Such usages are available under `cloudflared access help`.
+The current supported build targets are:
 
-You can instead use [WARP client](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/configuration/private-networks)
-to access private origins behind Tunnels for Layer 4 traffic without requiring `cloudflared access` commands on the client side.
+* Ubuntu-latest (amd64)
+* MacOS-latest (amd64)
+* Windows-latest (amd64)
+* FreeBSD 14 (amd64)
+* OpenBSD 7 (amd64)
+* NetBSD 10 (amd64)
 
+Builds happen on virtual machines and are not cross-compiled in Linux:
 
-## Before you get started
+```yaml
+cloudflared-freebsd14-amd64: ELF 64-bit LSB executable, x86-64, version 1 (FreeBSD), statically linked, for FreeBSD 12.3, FreeBSD-style, Go BuildID=whtbnhgLy_4DNlvoQVLN/sdPbSLy5tutf2R4FBg0D/tkLU1W0BkczEJ-UfmxXi/-wnnwpjpQM5JSMNpsu8B, with debug_info, not stripped
 
-Before you use Cloudflare Tunnel, you'll need to complete a few steps in the Cloudflare dashboard: you need to add a
-website to your Cloudflare account. Note that today it is possible to use Tunnel without a website (e.g. for private
-routing), but for legacy reasons this requirement is still necessary:
-1. [Add a website to Cloudflare](https://support.cloudflare.com/hc/en-us/articles/201720164-Creating-a-Cloudflare-account-and-adding-a-website)
-2. [Change your domain nameservers to Cloudflare](https://support.cloudflare.com/hc/en-us/articles/205195708)
+cloudflared-openbsd7-amd64: ELF 64-bit LSB executable, x86-64, version 1 (OpenBSD), dynamically linked, interpreter /usr/libexec/ld.so, for OpenBSD, Go BuildID=sKt-KKXK70xaz3xIjpcG/DI00O_ESV89p0mlN2FHW/CxKapph2Ks5I7Pe4q00b/xlodVQBnz_4GDBLMx3C-, with debug_info, not stripped
 
+cloudflared-netbsd10-amd64: ELF 64-bit LSB executable, x86-64, version 1 (NetBSD), statically linked, for NetBSD 7.0, BuildID[sha1]=ee1a86cd4d2281c56b0c2e124f8337716aa22844, with debug_info, not stripped
+```
 
-## Installing `cloudflared`
+## Branching Model
 
-Downloads are available as standalone binaries, a Docker image, and Debian, RPM, and Homebrew packages. You can also find releases [here](https://github.com/cloudflare/cloudflared/releases) on the `cloudflared` GitHub repository.
+* **`custom/patch` (default)**
 
-* You can [install on macOS](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation#macos) via Homebrew or by downloading the [latest Darwin amd64 release](https://github.com/cloudflare/cloudflared/releases)
-* Binaries, Debian, and RPM packages for Linux [can be found here](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation#linux)
-* A Docker image of `cloudflared` is [available on DockerHub](https://hub.docker.com/r/cloudflare/cloudflared)
-* You can install on Windows machines with the [steps here](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation#windows)
-* To build from source, install the required version of go, mentioned in the [Development](#development) section below. Then you can run `make cloudflared`.
+  * Contains *only* our fork-specific changes (CI config, workflows, branding, etc.).
+  * Users and automation never push directly to this branch—it serves as the persistent overlay.
 
-User documentation for Cloudflare Tunnel can be found at https://developers.cloudflare.com/cloudflare-one/connections/connect-apps
+* **`release/<tag>`**
 
+  * Created automatically (or manually) for each new upstream release tag (e.g. `release/2025.4.2`).
+  * Merges the upstream tag, then applies `custom/patch` on top.
+  * Open a PR from this branch into `custom/patch` to review upstream changes + overlay.
 
-## Creating Tunnels and routing traffic
+## Getting Started
 
-Once installed, you can authenticate `cloudflared` into your Cloudflare account and begin creating Tunnels to serve traffic to your origins.
+1. **Clone your fork**
 
-* Create a Tunnel with [these instructions](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/)
-* Route traffic to that Tunnel:
-  * Via public [DNS records in Cloudflare](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/routing-to-tunnel/dns)
-  * Or via a public hostname guided by a [Cloudflare Load Balancer](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/routing-to-tunnel/lb)
-  * Or from [WARP client private traffic](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/private-net/)
+   ```sh
+   git clone https://github.com/<your-org>/cloudflared.git
+   cd cloudflared
+   ```
 
+2. **Verify `custom/patch` is default**
 
-## TryCloudflare
+   ```sh
+   git branch --show-current  # should output: custom/patch
+   ```
 
-Want to test Cloudflare Tunnel before adding a website to Cloudflare? You can do so with TryCloudflare using the documentation [available here](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/).
+3. **Update README**
+   Simply edit this file and push to `custom/patch`:
 
-## Deprecated versions
+   ```sh
+   git checkout custom-change
+   git add README.md
+   git commit -m "docs: update README"
+   git push origin custom-change
+   ```
 
-Cloudflare currently supports versions of cloudflared that are **within one year** of the most recent release. Breaking changes unrelated to feature availability may be introduced that will impact versions released more than one year ago. You can read more about upgrading cloudflared in our [developer documentation](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/#updating-cloudflared).
+## Contributing
 
-For example, as of January 2023 Cloudflare will support cloudflared version 2023.1.1 to cloudflared 2022.1.1.
-
-## Development
-
-### Requirements
-- [GNU Make](https://www.gnu.org/software/make/)
-- [capnp](https://capnproto.org/install.html)
-- [go >= 1.24](https://go.dev/doc/install)
-- Optional tools:
-  - [capnpc-go](https://pkg.go.dev/zombiezen.com/go/capnproto2/capnpc-go)
-  - [goimports](https://pkg.go.dev/golang.org/x/tools/cmd/goimports)
-  - [golangci-lint](https://github.com/golangci/golangci-lint)
-  - [gomocks](https://pkg.go.dev/go.uber.org/mock)
-
-### Build
-To build cloudflared locally run `make cloudflared`
-
-### Test
-To locally run the tests run `make test`
-
-### Linting
-To format the code and keep a good code quality use `make fmt` and `make lint`
-
-### Mocks
-After changes on interfaces you might need to regenerate the mocks, so run `make mock`
+1. Open issues or PRs against **`custom/patch`** for any improvements to workflows, docs, or configs.
+2. Upstream bugs/features should still be filed against [cloudflare/cloudflared](https://github.com/cloudflare/cloudflared).

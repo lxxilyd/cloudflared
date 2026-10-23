@@ -1,27 +1,34 @@
 name: Build
 
+# Triggered by the sync pipeline (see sync-cloudflared.yaml) right after it
+# publishes the release for "upstream tag + BSD patch". Every leg checks out the
+# tag the release points at, i.e. the patched commit, not upstream's tag.
 on:
-  push: 
-    tags: ["*"]
-    branches: ["release/*"]
   release:
-    types: [created, published]
+    types: [published]
   workflow_dispatch:
+
+env:
+  # cloudflared's go.mod now carries a full patch-level directive
+  # (`go 1.27.3`), and the go command refuses to build with anything older.
+  # This must be kept in sync with upstream's go.mod, bump it on every sync
+  # failure of the form "go.mod requires go >= 1.xx.y".
+  GO_VERSION: "1.27.3"
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        go-version: [1.24.x]
         os: [ubuntu-latest, macos-latest, windows-latest, freebsd, netbsd, openbsd]
+    # The BSD legs only need a Linux host to boot the VM.
     runs-on: ${{ contains(matrix.os, 'bsd') && 'ubuntu-latest' || matrix.os }}
     env:
-      GOEXPERIMENT: "noboringcrypto"
-      CGO_ENABLED: 0
+      CGO_ENABLED: "0"
     steps:
-      - name: Get latest release tag
+      - name: Resolve latest release tag
         id: get_release
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             const { data } = await github.rest.repos.getLatestRelease({
@@ -30,38 +37,49 @@ jobs:
             });
             core.setOutput('tag_name', data.tag_name);
 
-      - name: Checkout Release Tag
+      - name: Checkout release tag
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.get_release.outputs.tag_name }}
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Install go ${{ matrix.go-version }} on ${{ matrix.os }}
+      # ---------------------------------------------------------------------
+      # Native runners
+      # ---------------------------------------------------------------------
+      - name: Install Go ${{ env.GO_VERSION }}
         if: ${{ !contains(matrix.os, 'bsd') }}
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
-      - name: Build for ${{ contains(matrix.os, 'bsd') && 'Ubuntu-latest|MacOS-latest|Windows-latest' || matrix.os }}
-        if: ${{ !contains(matrix.os, 'bsd') }}
-        run: |
-          make cloudflared
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
+      - name: Build on ${{ matrix.os }}
+        if: ${{ !contains(matrix.os, 'bsd') }}
+        run: make cloudflared
+
+      # ---------------------------------------------------------------------
+      # BSD: no official GitHub runner, so boot a VM. The distro `go` package is
+      # always older than upstream's go.mod directive, therefore the official
+      # tarball is used for all three BSDs.
+      # ---------------------------------------------------------------------
       - name: Build for FreeBSD
         if: matrix.os == 'freebsd'
         uses: vmactions/freebsd-vm@v1
         with:
-          release: "14.2"
-          envs: "GOEXPERIMENT CGO_ENABLED"
+          release: "14.3"
+          envs: "GO_VERSION CGO_ENABLED"
           usesh: true
           mem: 4096
           prepare: |
-            pkg install -y gmake sudo bash git go golangci-lint curl wget fakeroot libffi rubygem-fpm
-            git config --global --add safe.directory /home/runner/work/cloudflared/cloudflared
+            pkg install -y gmake sudo bash git curl ca_root_nss
+            git config --global --add safe.directory "$PWD"
           run: |
-            go mod download
-            go mod tidy
-            go install golang.org/x/tools/cmd/goimports@latest
+            curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.freebsd-amd64.tar.gz"
+            rm -rf /usr/local/go
+            tar -C /usr/local -xzf /tmp/go.tgz
+            export PATH=/usr/local/go/bin:$PATH
+            go version
             gmake cloudflared
 
       - name: Build for NetBSD
@@ -69,7 +87,7 @@ jobs:
         uses: vmactions/netbsd-vm@v1
         with:
           release: "10.1"
-          envs: "GOEXPERIMENT CGO_ENABLED"
+          envs: "GO_VERSION CGO_ENABLED"
           usesh: true
           mem: 4096
           prepare: |
@@ -78,14 +96,15 @@ jobs:
             export PKG_PATH
             pkg_add -U pkgin pkg_alternatives
             pkgin update
-            pkgin -y install gmake sudo bash git go golangci-lint curl wget fakeroot libffi ruby32 
+            pkgin -y install gmake sudo bash git curl ca-certificates
             pkg_alternatives rebuild
-            gem install fpm
-            git config --global --add safe.directory /home/runner/work/cloudflared/cloudflared
+            git config --global --add safe.directory "$PWD"
           run: |
-            go mod download
-            go mod tidy
-            go install golang.org/x/tools/cmd/goimports@latest
+            curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.netbsd-amd64.tar.gz"
+            rm -rf /usr/local/go
+            tar -C /usr/local -xzf /tmp/go.tgz
+            export PATH=/usr/local/go/bin:/usr/pkg/bin:$PATH
+            go version
             gmake cloudflared
 
       - name: Build for OpenBSD
@@ -93,28 +112,34 @@ jobs:
         uses: vmactions/openbsd-vm@v1
         with:
           release: "7.7"
-          envs: "GOEXPERIMENT CGO_ENABLED"
+          envs: "GO_VERSION CGO_ENABLED"
           usesh: true
           mem: 4096
           prepare: |
-            pkg_add -xaz gmake sudo-- bash git go curl wget libffi ruby-34
-            gem34 install fpm
-            git config --global --add safe.directory /home/runner/work/cloudflared/cloudflared
+            pkg_add -xaz gmake sudo-- bash git curl
+            git config --global --add safe.directory "$PWD"
           run: |
-            go mod download
-            go mod tidy
-            go install golang.org/x/tools/cmd/goimports@latest
+            curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.openbsd-amd64.tar.gz"
+            rm -rf /usr/local/go
+            tar -C /usr/local -xzf /tmp/go.tgz
+            export PATH=/usr/local/go/bin:$PATH
+            go version
             gmake cloudflared
 
+      # ---------------------------------------------------------------------
+      # Publish the artifact of this leg
+      # ---------------------------------------------------------------------
       - name: Authenticate GH CLI
         run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
-      - name: Upload windows-latest build to GitHub Release
+      - name: Upload windows build to GitHub Release
         if: contains(matrix.os, 'windows')
+        shell: pwsh
         run: |
           Compress-Archive -Path .\cloudflared.exe -DestinationPath cloudflared-${{ matrix.os }}-amd64.zip
           gh release upload "${{ steps.get_release.outputs.tag_name }}" cloudflared-${{ matrix.os }}-amd64.zip --clobber
-      - name: Upload ${{ contains(matrix.os, 'windows') && 'Other' || matrix.os }} build to GitHub Release
+
+      - name: Upload ${{ matrix.os }} build to GitHub Release
         if: ${{ !contains(matrix.os, 'windows') }}
         run: |
           tar -czvf cloudflared-${{ matrix.os }}-amd64.tar.gz cloudflared

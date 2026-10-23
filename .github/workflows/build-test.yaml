@@ -1,21 +1,27 @@
 name: Build Check
 
-on: 
+on:
   push: {}
   pull_request: {}
   workflow_dispatch:
+
+env:
+  # Must be >= the `go` directive of upstream's go.mod (currently 1.27.3).
+  GO_VERSION: "1.27.3"
+
 jobs:
   check:
     strategy:
+      fail-fast: false
       matrix:
-        go-version: [1.24.x]
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - name: Install Go
       uses: actions/setup-go@v5
       with:
-        go-version: ${{ matrix.go-version }}
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
     - name: Checkout code
       uses: actions/checkout@v4
     - name: Build Check

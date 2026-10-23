@@ -1,105 +1,154 @@
 name: Sync cloudflared Release
 
+# Replaces the old "merge origin/custom/patch into the new upstream tag" flow.
+#
+# Why: merging a branch whose merge-base is a year old leaves conflict markers in
+# the tree, and `git add -A && git commit` stores them, so the release branch only
+# fails later inside the build. On top of that the old flow re-checked out a
+# complete stale Makefile from the patch branch, which reverted upstream's move
+# away from `-mod=vendor` and broke every build after the vendor/ directory was
+# removed.
+#
+# New flow (no merge, no conflict markers, verified before publishing):
+#   1. check out pristine upstream tag
+#   2. run custom/bsd/apply.sh (overlay + build tags + Makefile netbsd)
+#   3. cross-compile for freebsd/openbsd/netbsd - fail here, not in the release
+#   4. push release/<tag> and publish the GitHub release
+
 permissions:
   contents: write
-  pull-requests: write
+  actions: write
 
 on:
   schedule:
     - cron: '0 */12 * * *'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to sync (empty = latest)'
+        required: false
+      force:
+        description: 'Rebuild an existing release/<tag> branch'
+        type: boolean
+        default: false
+
+concurrency:
+  group: sync-cloudflared
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      # Keep in sync with .github/workflows/build.yaml and upstream's go.mod.
+      GO_VERSION: "1.27.3"
     steps:
-      - name: Checkout custom/patch branch
+      - name: Checkout default branch
         uses: actions/checkout@v4
         with:
-          ref: custom/patch
           fetch-depth: 0
+          fetch-tags: true
 
-      - name: Get latest upstream release info
-        id: get_release
-        run: |
-          echo 'Fetching latest release tag from cloudflare/cloudflared...'
-          release=$(curl -s https://api.github.com/repos/cloudflare/cloudflared/releases/latest)
-          tag=$(echo "$release" | jq -r .tag_name)
-          title=$(echo "$release" | jq -r .name)
-          echo "tag=$tag" >> $GITHUB_OUTPUT
-          echo "title=$title" >> $GITHUB_OUTPUT
-          echo "TAG=$tag" >> $GITHUB_ENV
-          echo "TITLE=$title" >> $GITHUB_ENV
-          echo "tag=$tag"
-          echo "title=$title"
-          echo "TAG=$tag"
-          echo "TITLE=$title"
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
 
-      - name: Check if already up-to-date
-        id: check_version
+      - name: Resolve upstream release
+        id: upstream
         run: |
-          git fetch --tags
-          last=$(git tag --sort=-creatordate | head -n1 )
-          echo "current=$last" >> $GITHUB_OUTPUT
-          echo "current=$last"
-          if [ "$last" = "${{ env.TAG }}" ]; then
-            echo 'up_to_date=true' >> $GITHUB_OUTPUT
-            echo 'up_to_date=true'
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag }}"
+          if [ -z "$tag" ]; then
+            tag=$(curl -fsSL https://api.github.com/repos/cloudflare/cloudflared/releases/latest | jq -r .tag_name)
+          fi
+          case "$tag" in
+            [0-9][0-9][0-9][0-9].*) ;;
+            *) echo "unexpected tag: $tag" >&2; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "resolved upstream tag: $tag"
+
+      - name: Check whether this release already exists
+        id: check
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin "refs/heads/release/${TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "release/${TAG} already exists"
           else
-            echo 'up_to_date=false' >> $GITHUB_OUTPUT
-            echo 'up_to_date=false'
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Prepare Release branch
-        if: steps.check_version.outputs.up_to_date == 'false'
+      - name: Build release branch from upstream tag + BSD patch
+        id: build_branch
+        if: steps.check.outputs.exists == 'false' || github.event.inputs.force == 'true'
         run: |
+          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
 
-          branch="release/${TAG}"
+          # The patch set lives on the default branch, so stash it before moving
+          # the working tree onto the upstream tag.
+          rm -rf /tmp/bsd && cp -R custom/bsd /tmp/bsd
 
-          #1 Add upstream and fetch the tag
           git remote add upstream https://github.com/cloudflare/cloudflared.git
-          git fetch upstream --depth=1 tag "${TAG}"
+          git fetch --depth=1 upstream "refs/tags/${TAG}:refs/tags/upstream-${TAG}"
+          git checkout -B "release/${TAG}" "upstream-${TAG}"
 
-          #2 Create new branch off the upstream tag
-          git checkout -b "${branch}" "FETCH_HEAD"
-
-          #3 Merge in custom/patch
-          git fetch origin custom/patch
-          git merge --no-commit --no-ff origin/custom/patch || true
-
-          #4 Re-apply your own workflows
+          # Upstream CI must not run against our branch.
           rm -rf .github/workflows
-          git checkout origin/custom/patch -- \
-            diagnostic/network/collector_unix_test.go \
-            diagnostic/network/collector_unix.go \
-            diagnostic/system_collector_unix.go \
-            ingress/icmp_posix.go \
-            ingress/icmp_posix_test.go \
-            Makefile
 
-          #5 Finalise and push
+          mkdir -p custom
+          cp -R /tmp/bsd custom/bsd
+          sh ./custom/bsd/apply.sh
+
+          # Gate: the patch is worthless if the result does not compile for the
+          # BSDs. Cross-compiling from Linux is enough because CGO is disabled.
+          for os in freebsd openbsd netbsd; do
+            echo "::group::cross-build ${os}/amd64"
+            GOOS="$os" GOARCH=amd64 go build -mod=readonly ./cmd/cloudflared
+            rm -f cloudflared
+            echo "::endgroup::"
+          done
+          echo "::group::cross-build freebsd/arm64"
+          GOOS=freebsd GOARCH=arm64 go build -mod=readonly ./cmd/cloudflared
+          rm -f cloudflared
+          echo "::endgroup::"
+
+          # The patch sources are not part of the shipped tree.
+          rm -rf custom
+
           git add -A
-          git commit -m "sync: apply custom/patch on ${TAG}"
-          git push --force-with-lease origin "${branch}"
+          git commit -m "sync: apply custom BSD patch on ${TAG}"
+          git push --force-with-lease origin "release/${TAG}"
 
-      - name: Create GitHub Release
-        if: steps.check_version.outputs.up_to_date == 'false'
-        uses: softprops/action-gh-release@v1
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        if: steps.build_branch.outputs.pushed == 'true'
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          name: ${{ env.TITLE }}
+          name: ${{ env.TAG }}
           body: |
-            Automated cloudflared release of version **${{ env.TAG }}**  
-            Stock upstream cloudflared with xxx-BSD tweaks from `custom/patch` branch in this repo.
+            Automated build of cloudflared **${{ env.TAG }}**
+
+            Stock upstream source with the BSD tweaks from `custom/bsd` (applied on top of the pristine tag, see `sync-cloudflared.yaml`).
           draft: false
           prerelease: false
           target_commitish: release/${{ env.TAG }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Trigger Build workflow
-        if: steps.check_version.outputs.up_to_date == 'false'
-        run: gh workflow run "Build" --repo ${{ github.repository }}
-        env: 
-          GITHUB_TOKEN: ${{ secrets.PTA_TOKEN }}
+
+      # Events fired with GITHUB_TOKEN do not start new workflow runs, so the
+      # build has to be dispatched explicitly with a PAT.
+      - name: Trigger build workflow
+        if: steps.build_branch.outputs.pushed == 'true'
+        run: |
+          gh workflow run "Build" --repo "${{ github.repository }}" --ref "${{ github.event.repository.default_branch }}"
+        env:
+          GH_TOKEN: ${{ secrets.PTA_TOKEN }}

@@ -1,5 +1,7 @@
 //go:build freebsd || openbsd || netbsd
 
+// custom/bsd overlay: managed by custom/bsd/apply.sh, do not edit by hand.
+
 package main
 
 // Upstream wires createTokenFile up per platform: linux_service.go and

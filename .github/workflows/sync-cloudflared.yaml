@@ -83,6 +83,18 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Explain skip
+        if: steps.check.outputs.exists == 'true' && github.event.inputs.force != 'true'
+        run: |
+          echo "::notice::release/${TAG} already exists - nothing was rebuilt, Build was not triggered. Re-run with force=true to rebuild it."
+          {
+            echo "### Nothing to do"
+            echo ""
+            echo "\`release/${TAG}\` already exists, so nothing was rebuilt and the **Build** workflow was not triggered."
+            echo ""
+            echo "Re-run this workflow with **force = true** (tag = \`${TAG}\`) to rebuild it from the pristine upstream tag."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build release branch from upstream tag + BSD patch
         id: build_branch
         if: steps.check.outputs.exists == 'false' || github.event.inputs.force == 'true'
@@ -126,6 +138,14 @@ jobs:
           git commit -m "sync: apply custom BSD patch on ${TAG}"
           git push --force-with-lease origin "release/${TAG}"
 
+          # The release tag has to follow the rebuilt branch. The Build workflow
+          # checks out refs/tags/<TAG>, so a tag still pointing at a previous
+          # (e.g. broken) attempt would silently rebuild the same broken commit
+          # for an unchanged version number.
+          echo "moving tag ${TAG} to $(git rev-parse --short HEAD)"
+          git tag -f "${TAG}" HEAD
+          git push --force origin "refs/tags/${TAG}"
+
           echo "pushed=true" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release
@@ -145,10 +165,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Events fired with GITHUB_TOKEN do not start new workflow runs, so the
-      # build has to be dispatched explicitly with a PAT.
+      # build has to be dispatched explicitly. PTA_TOKEN is used when present
+      # (a classic PAT with actions:write), otherwise the built-in token works
+      # because the workflow declares the actions: write permission.
       - name: Trigger build workflow
         if: steps.build_branch.outputs.pushed == 'true'
         run: |
-          gh workflow run "Build" --repo "${{ github.repository }}" --ref "${{ github.event.repository.default_branch }}"
+          gh workflow run "Build" --repo "${{ github.repository }}"
+          {
+            echo "### Released ${TAG}"
+            echo ""
+            echo "release/${TAG} rebuilt from the pristine upstream tag + \`custom/bsd\`, Build dispatched."
+          } >> "$GITHUB_STEP_SUMMARY"
         env:
-          GH_TOKEN: ${{ secrets.PTA_TOKEN }}
+          GH_TOKEN: ${{ secrets.PTA_TOKEN || secrets.GITHUB_TOKEN }}

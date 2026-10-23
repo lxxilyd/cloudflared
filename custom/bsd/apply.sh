@@ -37,10 +37,16 @@ for src in $(cd "$OVERLAY" && find . -type f -name '*.go' | sed 's|^\./||' | sor
 	dst="$ROOT/$src"
 	if [ -f "$dst" ]; then
 		# Re-running on an already patched tree is fine as long as the content
-		# is still ours; otherwise upstream shipped its own file and a human has
-		# to reconcile them.
+		# is ours; otherwise upstream shipped its own file and a human has to
+		# reconcile them.
 		if cmp -s "$OVERLAY/$src" "$dst"; then
 			log "already applied $src"
+			continue
+		fi
+		# A stale copy of our own overlay (older patch revision): replace it.
+		if grep -q 'custom/bsd overlay' "$dst"; then
+			cp "$OVERLAY/$src" "$dst"
+			log "updated stale overlay $src"
 			continue
 		fi
 		die "upstream now ships $src itself - drop it from custom/bsd/overlay/ and adapt the patch"

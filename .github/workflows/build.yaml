@@ -15,6 +15,11 @@ env:
   # failure of the form "go.mod requires go >= 1.xx.y".
   GO_VERSION: "1.27.3"
 
+# `gh release upload` below writes to the release, so the token needs write
+# access even though the job only reads the repository.
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:

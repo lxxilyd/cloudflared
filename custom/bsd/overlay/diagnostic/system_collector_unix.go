@@ -1,5 +1,7 @@
 //go:build freebsd || openbsd || netbsd
 
+// custom/bsd overlay: managed by custom/bsd/apply.sh, do not edit by hand.
+
 package diagnostic
 
 // BSD implementation of the system information collector.
